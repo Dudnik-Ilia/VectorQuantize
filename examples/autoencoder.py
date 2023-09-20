@@ -1,12 +1,10 @@
-# FashionMnist VQ experiment with various settings.
-# From https://github.com/minyoungg/vqtorch/blob/main/examples/autoencoder.py
-
 from tqdm.auto import trange
-
+from einops import rearrange
 import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from torchviz import make_dot
 
 from vector_quantize_pytorch import VectorQuantize
 
@@ -41,10 +39,16 @@ class SimpleVQAutoEncoder(nn.Module):
     def forward(self, x):
         for layer in self.layers:
             if isinstance(layer, VectorQuantize):
-                x_shape = x.shape[:-1]
-                x_flat = x.view(x.size(0), -1, x.size(1))
+                # x_shape = x.shape[:-1]
+                image_shape = x.shape[-2:]
+                # Following reshape is not right, collects not through channels (columns),
+                # but pixels of one channel (one image) (visit Jupyter)
+                # x_flat = x.view(x.size(0), -1, x.size(1))
+                x_flat = rearrange(x, 'b c h w -> b (h w) c')
                 x_flat, indices, commit_loss = layer(x_flat)
-                x = x_flat.view(*x_shape, -1)
+                # Need to transform back, once more not using view!
+                # x = x_flat.contiguous().view(*x_shape, -1)
+                x = rearrange(x_flat, 'b (h w) c -> b c h w', h=image_shape[0], w=image_shape[1])
             else:
                 x = layer(x)
         return x.clamp(-1, 1), indices, commit_loss
@@ -66,8 +70,13 @@ def train(model, train_loader, train_iterations=1000, alpha=10):
         x, _ = next(iterate_dataset(train_loader))
         out, indices, cmt_loss = model(x)
         rec_loss = (out - x).abs().mean()
-        (rec_loss + alpha * cmt_loss).backward()
-
+        loss_summ = (rec_loss + alpha * cmt_loss)
+        loss_summ.backward(retain_graph=True)
+        """
+        make_dot(loss_summ, params=dict(model.named_parameters()),
+                 show_attrs=True,
+                 show_saved=True).render("attached", format="svg")
+        """
         opt.step()
         pbar.set_description(
             f"rec loss: {rec_loss.item():.3f} | "
@@ -88,7 +97,6 @@ train_dataset = DataLoader(
     shuffle=True,
 )
 
-print("baseline")
 torch.random.manual_seed(seed)
 model = SimpleVQAutoEncoder(codebook_size=num_codes).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=lr)

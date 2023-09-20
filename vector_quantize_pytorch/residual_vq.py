@@ -50,14 +50,15 @@ class ResidualVQ(nn.Module):
         assert quantize_dropout_cutoff_index >= 0
 
         self.quantize_dropout_cutoff_index = quantize_dropout_cutoff_index
-        self.quantize_dropout_multiple_of = quantize_dropout_multiple_of  # encodec paper proposes structured dropout, believe this was set to 4
+        # encodec paper proposes structured dropout, believe this was set to 4
+        self.quantize_dropout_multiple_of = quantize_dropout_multiple_of
 
         if not shared_codebook:
             return
-
+        # if Shared codes
+        # Initialize with the same codes
         first_vq, *rest_vq = self.layers
         codebook = first_vq._codebook
-
         for vq in rest_vq:
             vq._codebook = codebook
 
@@ -112,7 +113,8 @@ class ResidualVQ(nn.Module):
         return_all_codes = False,
         sample_codebook_temp = None
     ):
-        num_quant, quant_dropout_multiple_of, return_loss, device = self.num_quantizers, self.quantize_dropout_multiple_of, exists(indices), x.device
+        num_quant, quant_dropout_multiple_of, return_loss, device = \
+            self.num_quantizers, self.quantize_dropout_multiple_of, exists(indices), x.device
 
         assert not (self.accept_image_fmap and exists(indices))
 
@@ -156,8 +158,16 @@ class ResidualVQ(nn.Module):
 
             quantized, *rest = layer(residual, indices = layer_indices, sample_codebook_temp = sample_codebook_temp)
 
+            # Residual is connected Straight Through to the prev one
+            # The first one is X (input)
+            # The last one will be also ST connected to the output (quantized_out), cause
+            # It goes through implementation of VQ, where we have straight through input-output relation
             residual = residual - quantized.detach()
+            # Eventually summ over all quantized vectors
+            # This will be the output: summ of how we encode 'x', then resid of 'x', res of res...
             quantized_out = quantized_out + quantized
+            # The loss eventually should be propagated in a :cascade: way
+            # like the residual block in NN
 
             if return_loss:
                 ce_loss = rest[0]
